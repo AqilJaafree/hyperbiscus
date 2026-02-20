@@ -7,10 +7,10 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-defi_agent = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+defi_agent = "8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT"
 
 [programs.devnet]
-defi_agent = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+defi_agent = "8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT"
 
 [registry]
 url = "https://api.apr.dev"

@@ -1,7 +1,5 @@
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accounts};
+use ephemeral_rollups_sdk::anchor::ephemeral;
 
 pub mod errors;
 pub mod instructions;
@@ -10,7 +8,7 @@ pub mod state;
 use instructions::*;
 
 // Replace with actual program ID after `anchor build && anchor keys list`
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT");
 
 #[ephemeral]
 #[program]

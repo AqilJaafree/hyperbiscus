@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "CommonJS"
+    "module": "commonjs"
   },
-  "include": ["tests/**/*.ts", "target/types/**/*.ts"]
+  "include": ["tests/**/*.ts"]
 }
