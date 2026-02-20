@@ -67,10 +67,9 @@ apps/firmware/dependencies.lock
 apps/firmware/managed_components/
 
 # ============================================================
-# Rust (shared tooling)
+# Rust (Anchor programs commit Cargo.lock for reproducibility)
 # ============================================================
 target/
-Cargo.lock
 
 # ============================================================
 # OS
