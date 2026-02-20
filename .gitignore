@@ -1,0 +1,102 @@
+# ============================================================
+# Environment
+# ============================================================
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ============================================================
+# Node / pnpm
+# ============================================================
+node_modules/
+.pnpm-store/
+.pnpm-debug.log
+
+# ============================================================
+# Turborepo
+# ============================================================
+.turbo/
+
+# ============================================================
+# TypeScript
+# ============================================================
+*.tsbuildinfo
+dist/
+out/
+build/
+
+# ============================================================
+# Expo / React Native
+# ============================================================
+.expo/
+apps/mobile/.expo/
+apps/mobile/ios/build/
+apps/mobile/android/build/
+apps/mobile/android/.gradle/
+apps/mobile/*.jks
+apps/mobile/*.p8
+apps/mobile/*.p12
+apps/mobile/*.key
+apps/mobile/*.mobileprovision
+apps/mobile/google-services.json
+apps/mobile/GoogleService-Info.plist
+# Expo web build
+apps/mobile/web-build/
+# Metro bundler cache
+.metro-health-check*
+
+# ============================================================
+# Solana / Anchor
+# ============================================================
+packages/contracts/target/
+packages/contracts/.anchor/
+**/.anchor/
+**/target/
+
+# ============================================================
+# ESP-IDF (firmware)
+# ============================================================
+apps/firmware/build/
+apps/firmware/sdkconfig
+apps/firmware/sdkconfig.old
+apps/firmware/*.bin
+apps/firmware/*.elf
+apps/firmware/*.map
+apps/firmware/dependencies.lock
+apps/firmware/managed_components/
+
+# ============================================================
+# Rust (shared tooling)
+# ============================================================
+target/
+Cargo.lock
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V5
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Claude Code
+# ============================================================
+.claude/
+.claude-plugin/
+
+# ============================================================
+# Editors
+# ============================================================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~

@@ -1,0 +1,11 @@
+{
+  "name": "@hyperbiscus/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "expo start",
+    "build": "expo export",
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit"
+  }
+}
