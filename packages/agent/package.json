@@ -4,12 +4,15 @@
   "private": true,
   "scripts": {
     "start": "ts-node src/index.ts",
+    "setup": "ts-node scripts/setup.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
     "@coral-xyz/anchor": "^0.32.1",
     "@hyperbiscus/shared": "workspace:*",
+    "@meteora-ag/dlmm": "^1.9.3",
+    "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.98.4",
     "bn.js": "^5.2.1",
     "dotenv": "^16.4.7"

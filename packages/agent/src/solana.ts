@@ -65,7 +65,7 @@ export async function submitUpdateLpStatus(
   const { program, config, monitorPda } = ctx;
 
   const tx = await program.methods
-    .updateLpStatus(activeBin, feeX.toNumber(), feeY.toNumber())
+    .updateLpStatus(activeBin, feeX, feeY)
     .accounts({
       sessionKey: config.sessionKeypair.publicKey,
       session: config.sessionPda,
