@@ -153,20 +153,59 @@ The device handles everything else autonomously.
 
 ## Getting Started
 
-### Prerequisites
+### Option A — Laptop agent (demo mode, no hardware required)
 
-- ESP-IDF 5.5 or greater
-- Anthropic API key (Claude) or OpenAI API key
-- Solana wallet
-- Telegram bot token (via @BotFather)
+The `packages/agent` package runs the full MimiClaw monitoring loop on your laptop using Node.js. It connects to real devnet, calls real MagicBlock + Meteora contracts, and reasons with Claude — identical behaviour to the ESP32 firmware, just a different runtime.
 
-### Installation
+**Prerequisites:**
+- Anthropic API key
+- Solana devnet wallet with an active `AgentSession` + `LpPositionMonitor` PDA (run `anchor test` once to create them)
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-repo/defi-agent-hardware
-cd defi-agent-hardware
+cd packages/agent
 
+# Configure
+cp .env.example .env
+# Edit .env: ANTHROPIC_API_KEY, SESSION_PDA, LB_PAIR, POSITION_PUBKEY
+
+# Run
+pnpm start
+```
+
+**What you'll see:**
+
+```
+╔══════════════════════════════════════════════════════════╗
+║          hyperbiscus — DeFi Agent (laptop mode)          ║
+║          Simulating MimiClaw ESP32-S3 agent              ║
+╚══════════════════════════════════════════════════════════╝
+
+[init] session PDA : 7xK...
+[init] monitor PDA : 9mF...
+
+────────────────────────────────────────────────────
+[tick 1] 2026-02-21T10:00:00.000Z
+  → tool: check_lp_position {}
+  ← check_lp_position: {"activeBin":8432,"isInRange":true,"feeX":"1240","feeY":"890"}
+  → tool: update_lp_status {"active_bin":8432,"fee_x":1240,"fee_y":890}
+  ← update_lp_status: {"success":true,"signature":"3xK..."}
+
+[agent] Position in range (bin 8432 ∈ [8420–8450]). Fees accruing normally — X: 1240, Y: 890. Status checkpointed on-chain.
+```
+
+Each tick appends to `packages/agent/MEMORY.md` — the same pattern MimiClaw uses to persist memory to ESP32 SPIFFS flash.
+
+---
+
+### Option B — ESP32-S3 firmware (production)
+
+**Prerequisites:**
+- ESP32-S3 board (16MB flash, 8MB PSRAM — see Hardware Requirements)
+- ESP-IDF 5.5 or greater
+- Anthropic API key (Claude) or OpenAI API key
+- Telegram bot token (via @BotFather)
+
+```bash
 # Configure secrets
 cp main/mimi_secrets.h.example main/mimi_secrets.h
 # Edit mimi_secrets.h with your WiFi, API keys, and Telegram token
@@ -175,11 +214,9 @@ cp main/mimi_secrets.h.example main/mimi_secrets.h
 idf.py set-target esp32s3
 idf.py build
 
-# Flash to device (use the USB port, not COM)
+# Flash to device
 idf.py -p /dev/ttyACM0 flash monitor
 ```
-
-### First Run
 
 Once flashed, the device will:
 1. Connect to WiFi
@@ -331,16 +368,32 @@ Get devnet SOL from [faucet.solana.com](https://faucet.solana.com). The wallet p
 
 ## Roadmap
 
+### ✅ Done
+
 - [x] MimiClaw base integration (ReAct loop, memory, cron, tool calling)
 - [x] Solana session key management via MagicBlock (AgentSession PDA, delegation, ER execution)
 - [x] Meteora DLMM LP execution (swap, add liquidity, close position via CPI)
 - [x] LP position monitoring (detect out-of-range, fee accrual tracking)
-- [ ] Yield optimization tool (Marginfi / Solend rate switching)
-- [ ] Liquidation protection tool (leveraged position health monitoring)
-- [ ] ESP32-S3 firmware agent (ESP-IDF + MimiClaw integration)
-- [ ] Mobile app (React Native — position monitor, session approval)
+- [x] Laptop agent demo (`packages/agent`) — full ReAct loop on Node.js, real devnet, real MagicBlock
+
+### 🔜 Next
+
+- [ ] **Yield optimization tool** — Marginfi / Solend rate switching; agent autonomously moves idle capital to highest-yield lending market
+- [ ] **Liquidation protection tool** — monitor leveraged position health (Drift / Marginfi), trigger emergency close before liquidation threshold
+- [ ] **Auto-rebalance action** — when LP goes out-of-range, agent calls `execute_dlmm_close_position` + `execute_dlmm_add_liquidity` to re-center
+- [ ] **Fee harvest tool** — when unclaimed fees exceed threshold, agent triggers harvest and routes to yield protocol
+
+### 📱 Mobile & Hardware
+
+- [ ] **Mobile app** (React Native) — live position monitor, session key approval, push alerts on out-of-range
+- [ ] **ESP32-S3 firmware** (ESP-IDF + MimiClaw) — port the `packages/agent` logic to C, run at 0.5W on $10 hardware
+- [ ] **Telegram bot** — remote control and alerts via Telegram (MimiClaw already supports this natively)
+
+### 🌐 Future
+
 - [ ] BTC yield strategy integration
 - [ ] x402 payment layer for premium strategy access
+- [ ] Multi-position monitoring (one agent session, multiple LP positions)
 
 ---
 
