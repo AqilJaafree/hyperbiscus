@@ -605,6 +605,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "blake3",
+ "bytemuck",
  "ephemeral-rollups-sdk",
 ]
 

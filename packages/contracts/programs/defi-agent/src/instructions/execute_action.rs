@@ -38,7 +38,7 @@ pub fn handler(
     require!(new_spent <= session.max_lamports, AgentError::ExposureLimitExceeded);
 
     session.spent_lamports = new_spent;
-    session.total_actions += 1;
+    session.bump_actions()?;
     session.last_action_at = clock.unix_timestamp;
 
     msg!(

@@ -19,6 +19,8 @@ idl-build = ["anchor-lang/idl-build"]
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
 ephemeral-rollups-sdk = { version = "0.6.5", features = ["anchor", "disable-realloc"] }
+# Required by declare_program!(dlmm) — DLMM IDL has zero_copy accounts that need Pod
+bytemuck = { version = "1.14", features = ["derive", "min_const_generics"] }
 
 # blake3 1.8.x bumped constant_time_eq to ^0.4.2 which requires Rust edition2024
 # (>=1.85.0). Solana BPF platform-tools ship Rust 1.84.x, so pin blake3 to 1.5.5

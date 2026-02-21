@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use crate::errors::AgentError;
 
 /// Strategy bitmask flags — combine with bitwise OR to enable multiple
 pub const STRATEGY_LP: u8 = 1 << 0;             // Concentrated LP rebalancing
@@ -65,5 +66,25 @@ impl AgentSession {
     pub fn has_strategy(&self, action_type: u8) -> bool {
         let bit = 1u8 << action_type;
         self.strategy_mask & bit != 0
+    }
+
+    /// Validate session state for any LP DLMM instruction (active, not expired,
+    /// correct session key, LP strategy enabled). Consolidates the repeated
+    /// 4-line validation block across execute_dlmm_swap/add_liquidity/close_position.
+    pub fn validate_lp_session(&self, session_key: Pubkey, timestamp: i64) -> Result<()> {
+        require!(self.is_active, AgentError::SessionInactive);
+        require!(!self.is_expired(timestamp), AgentError::SessionExpired);
+        require_keys_eq!(session_key, self.session_key, AgentError::UnauthorizedSessionKey);
+        require!(self.has_strategy(ACTION_LP_REBALANCE), AgentError::StrategyNotEnabled);
+        Ok(())
+    }
+
+    /// Increment total_actions with overflow protection.
+    pub fn bump_actions(&mut self) -> Result<()> {
+        self.total_actions = self
+            .total_actions
+            .checked_add(1)
+            .ok_or(AgentError::Overflow)?;
+        Ok(())
     }
 }
