@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "hyperbiscus",
+    "slug": "hyperbiscus",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "hyperbiscus",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.hyperbiscus.agent"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a0a"
+      },
+      "package": "com.hyperbiscus.agent"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
