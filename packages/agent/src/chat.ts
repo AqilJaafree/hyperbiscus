@@ -17,7 +17,7 @@ import { AgentConfig } from "./config";
 import { SolanaContext } from "./solana";
 import { TickMessage } from "./ws-server";
 import { TOOL_DEFINITIONS, buildToolExecutors, executeTool } from "./tools";
-import { loadSoul, loadRecentMemory, appendMemory } from "./memory";
+import { loadSoul, loadRecentMemory, appendMemory, sanitizeMemoryEntry } from "./memory";
 
 export async function handleChat(
   client: Anthropic,
@@ -45,16 +45,19 @@ export async function handleChat(
     {
       role: "user",
       content:
-        `Recent memory:\n${recentMemory}\n\n` +
+        // Tag memory as untrusted so Claude doesn't treat it as instructions
+        `<untrusted_memory>\n${recentMemory}\n</untrusted_memory>\n\n` +
         `${positionContext}\n\n` +
         `User message: ${userMessage}`,
     },
   ];
 
   let reply = "";
+  const MAX_REACT_ITERATIONS = 10;
+  let iterations = 0;
 
   // ReAct loop — Claude may call tools if it needs fresh data
-  while (true) {
+  while (iterations++ < MAX_REACT_ITERATIONS) {
     const response = await client.messages.create({
       model: config.claudeModel,
       max_tokens: 1024,
@@ -98,10 +101,10 @@ export async function handleChat(
     break;
   }
 
-  // Append chat exchange to memory
+  // Append sanitized exchange to memory (sanitizeMemoryEntry strips injection attempts)
   if (reply) {
-    appendMemory(`[chat] User: ${userMessage}`);
-    appendMemory(`[chat] Agent: ${reply}`);
+    appendMemory(`[chat] User: ${sanitizeMemoryEntry(userMessage)}`);
+    appendMemory(`[chat] Agent: ${sanitizeMemoryEntry(reply)}`);
   }
 
   return reply || "I couldn't generate a response. Please try again.";

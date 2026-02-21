@@ -16,26 +16,30 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useAgentUrl, DEFAULT_URL } from "@/hooks/useAgentUrl";
+import { useAgentUrl } from "@/hooks/useAgentUrl";
+import { colors } from "@/constants/theme";
+import { WEBSOCKET } from "@/constants/config";
 
 export default function Settings() {
   const router = useRouter();
-  const { url, setUrl } = useAgentUrl();
-  const [draft, setDraft] = useState(url);
+  const { url, setUrl, token, setToken } = useAgentUrl();
+  const [draftUrl, setDraftUrl] = useState(url);
+  const [draftToken, setDraftToken] = useState(token);
 
   async function save() {
-    const trimmed = draft.trim();
-    if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    const trimmedUrl = draftUrl.trim();
+    if (!trimmedUrl.startsWith("ws://") && !trimmedUrl.startsWith("wss://")) {
       Alert.alert("Invalid URL", "URL must start with ws:// or wss://");
       return;
     }
-    await setUrl(trimmed);
+    await Promise.all([setUrl(trimmedUrl), setToken(draftToken.trim())]);
     router.back();
   }
 
   async function reset() {
-    setDraft(DEFAULT_URL);
-    await setUrl(DEFAULT_URL);
+    setDraftUrl(WEBSOCKET.DEFAULT_URL);
+    setDraftToken("");
+    await Promise.all([setUrl(WEBSOCKET.DEFAULT_URL), setToken("")]);
   }
 
   return (
@@ -49,13 +53,31 @@ export default function Settings() {
 
         <TextInput
           style={styles.input}
-          value={draft}
-          onChangeText={setDraft}
+          value={draftUrl}
+          onChangeText={setDraftUrl}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
           placeholder="ws://192.168.1.x:18789"
-          placeholderTextColor="#555"
+          placeholderTextColor={colors.dim}
+          returnKeyType="next"
+        />
+
+        <Text style={styles.label}>Auth Token</Text>
+        <Text style={styles.hint}>
+          Optional. Set WS_SECRET in the agent .env and enter the same value here.
+          Leave blank for open access (localhost only).
+        </Text>
+
+        <TextInput
+          style={styles.input}
+          value={draftToken}
+          onChangeText={setDraftToken}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+          placeholder="leave blank if no WS_SECRET set"
+          placeholderTextColor={colors.dim}
           returnKeyType="done"
           onSubmitEditing={save}
         />
@@ -65,7 +87,7 @@ export default function Settings() {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.resetButton} onPress={reset}>
-          <Text style={styles.resetText}>Reset to default (localhost)</Text>
+          <Text style={styles.resetText}>Reset to defaults</Text>
         </TouchableOpacity>
 
         <View style={styles.infoBox}>
@@ -82,16 +104,6 @@ export default function Settings() {
     </SafeAreaView>
   );
 }
-
-const colors = {
-  bg: "#0a0a0a",
-  card: "#141414",
-  border: "#2a2a2a",
-  green: "#00d97e",
-  text: "#e0e0e0",
-  muted: "#888",
-  dim: "#555",
-};
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },

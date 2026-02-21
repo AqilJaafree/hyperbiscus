@@ -26,15 +26,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRef, useState, useEffect } from "react";
 import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
 import { useAgentUrl } from "@/hooks/useAgentUrl";
-
-function timeStr(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+import { colors, withAlpha } from "@/constants/theme";
+import { UI } from "@/constants/config";
+import { formatTime } from "@/utils/time";
 
 export default function Chat() {
-  const { url } = useAgentUrl();
+  const { url, token } = useAgentUrl();
   const { connected, chatMessages, chatPending, sendChat } =
-    useAgentWebSocket(url);
+    useAgentWebSocket(url, token);
 
   const [draft, setDraft] = useState("");
   const listRef = useRef<FlatList>(null);
@@ -42,7 +41,10 @@ export default function Chat() {
   // Scroll to bottom on new message
   useEffect(() => {
     if (chatMessages.length > 0) {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(
+        () => listRef.current?.scrollToEnd({ animated: true }),
+        UI.SCROLL_DELAY_MS
+      );
     }
   }, [chatMessages.length, chatPending]);
 
@@ -58,7 +60,7 @@ export default function Chat() {
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={90}
+        keyboardVerticalOffset={UI.KEYBOARD_OFFSET_IOS}
       >
         {/* Connection banner */}
         {!connected && (
@@ -107,7 +109,7 @@ export default function Chat() {
               >
                 {item.message}
               </Text>
-              <Text style={styles.bubbleTime}>{timeStr(item.timestamp)}</Text>
+              <Text style={styles.bubbleTime}>{formatTime(item.timestamp)}</Text>
             </View>
           )}
           ListFooterComponent={
@@ -156,26 +158,13 @@ const SUGGESTIONS = [
   "Check the position and give me a fresh reading",
 ];
 
-const colors = {
-  bg: "#0a0a0a",
-  card: "#141414",
-  border: "#2a2a2a",
-  green: "#00d97e",
-  user: "#00d97e",
-  agent: "#1e1e1e",
-  text: "#e0e0e0",
-  muted: "#888",
-  dim: "#555",
-  red: "#ff4d4f",
-};
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   banner: {
-    backgroundColor: colors.red + "22",
+    backgroundColor: withAlpha(colors.red, 0.13),
     borderBottomWidth: 1,
-    borderColor: colors.red + "44",
+    borderColor: withAlpha(colors.red, 0.27),
     padding: 10,
     alignItems: "center",
   },
@@ -215,9 +204,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   bubbleUser: {
-    backgroundColor: colors.user + "22",
+    backgroundColor: withAlpha(colors.user, 0.13),
     borderWidth: 1,
-    borderColor: colors.user + "55",
+    borderColor: withAlpha(colors.user, 0.33),
     alignSelf: "flex-end",
   },
   bubbleAgent: {

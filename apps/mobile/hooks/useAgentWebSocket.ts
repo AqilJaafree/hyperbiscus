@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { UI, WEBSOCKET } from "@/constants/config";
 
 export interface AgentConfig {
   sessionPda: string;
@@ -43,10 +44,8 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-const MAX_HISTORY = 50;
-const RECONNECT_DELAY_MS = 2000;
 
-export function useAgentWebSocket(url: string) {
+export function useAgentWebSocket(url: string, token: string = "") {
   const [connected, setConnected] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [lastTick, setLastTick] = useState<TickData | null>(null);
@@ -66,6 +65,8 @@ export function useAgentWebSocket(url: string) {
 
     ws.onopen = () => {
       if (unmounted.current) { ws.close(); return; }
+      // Send auth token if configured — server expects this as first message
+      if (token) ws.send(JSON.stringify({ type: "auth", token }));
       setConnected(true);
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
@@ -103,7 +104,11 @@ export function useAgentWebSocket(url: string) {
             error: msg.error,
           };
           setLastTick(tick);
-          setHistory((prev) => [tick, ...prev].slice(0, MAX_HISTORY));
+          setHistory((prev) => {
+            // deduplicate by timestamp to avoid key collisions on reconnect
+            const deduped = prev.filter((t) => t.timestamp !== tick.timestamp);
+            return [tick, ...deduped].slice(0, UI.MAX_HISTORY_ITEMS);
+          });
 
         } else if (msg.type === "chat_thinking") {
           setChatPending(true);
@@ -128,11 +133,11 @@ export function useAgentWebSocket(url: string) {
       if (unmounted.current) return;
       setConnected(false);
       setChatPending(false);
-      reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);
+      reconnectTimer.current = setTimeout(connect, WEBSOCKET.RECONNECT_DELAY_MS);
     };
 
     ws.onerror = () => { ws.close(); };
-  }, [url]);
+  }, [url, token]);
 
   useEffect(() => {
     unmounted.current = false;

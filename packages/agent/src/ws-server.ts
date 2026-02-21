@@ -80,7 +80,7 @@ export function startWsServer(
   getLastTick: () => TickMessage | null;
   setLastTick: (tick: TickMessage) => void;
 } {
-  const wss = new WebSocketServer({ port: WS_PORT });
+  const wss = new WebSocketServer({ port: WS_PORT, maxPayload: 64 * 1024 }); // 64 KB max frame
   let lastTick: TickMessage | null = null;
 
   const connectedPayload: ConnectedMessage = {
@@ -107,14 +107,36 @@ export function startWsServer(
     }
   }
 
+  // Track which connections have passed auth
+  const authenticated = new WeakSet<WebSocket>();
+  const secret = config.wsSecret;
+
+  function isAuthenticated(ws: WebSocket): boolean {
+    return !secret || authenticated.has(ws);
+  }
+
+  function authorizeAndGreet(ws: WebSocket): void {
+    authenticated.add(ws);
+    send(ws, connectedPayload);
+    if (lastTick) send(ws, lastTick);
+  }
+
   wss.on("connection", (ws) => {
     console.log(`[ws] client connected (total: ${wss.clients.size})`);
 
-    // Send static config immediately
-    send(ws, connectedPayload);
-
-    // Send last tick so client has data right away
-    if (lastTick) send(ws, lastTick);
+    if (!secret) {
+      // No secret configured — open access (dev mode)
+      authorizeAndGreet(ws);
+    } else {
+      // Require auth token within 5 s or disconnect
+      const authTimeout = setTimeout(() => {
+        if (!authenticated.has(ws)) {
+          console.warn("[ws] auth timeout — closing unauthenticated connection");
+          ws.close(1008, "auth timeout");
+        }
+      }, 5000);
+      ws.on("close", () => clearTimeout(authTimeout));
+    }
 
     ws.on("message", async (raw) => {
       let msg: any;
@@ -124,11 +146,29 @@ export function startWsServer(
         return;
       }
 
+      // Handle auth handshake
+      if (msg.type === "auth") {
+        if (secret && msg.token === secret) {
+          authorizeAndGreet(ws);
+        } else {
+          console.warn("[ws] invalid auth token — closing connection");
+          ws.close(1008, "unauthorized");
+        }
+        return;
+      }
+
+      // Reject all other messages from unauthenticated clients
+      if (!isAuthenticated(ws)) {
+        ws.close(1008, "unauthorized");
+        return;
+      }
+
       if (msg.type === "chat" && typeof msg.message === "string") {
         const userMessage = msg.message.trim();
-        if (!userMessage) return;
+        if (!userMessage || userMessage.length > 4096) return;
 
-        console.log(`[chat] user: ${userMessage}`);
+        // Log truncated — never log full user message content
+        console.log(`[chat] user (${userMessage.length} chars)`);
 
         // Tell mobile the agent is thinking
         broadcastAll({ type: "chat_thinking" });
@@ -141,7 +181,7 @@ export function startWsServer(
             userMessage,
             lastTick,
           );
-          console.log(`[chat] agent: ${reply.slice(0, 80)}...`);
+          console.log(`[chat] agent replied (${reply.length} chars)`);
           broadcastAll({
             type: "chat_response",
             message: reply,

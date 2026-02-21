@@ -18,7 +18,8 @@
       "adaptiveIcon": {
         "backgroundColor": "#0a0a0a"
       },
-      "package": "com.hyperbiscus.agent"
+      "package": "com.hyperbiscus.agent",
+      "usesCleartextTraffic": false
     },
     "plugins": [
       "expo-router"

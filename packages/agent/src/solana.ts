@@ -82,7 +82,7 @@ export async function submitUpdateLpStatus(
     ctx.connection,
     tx,
     [config.sessionKeypair],
-    { commitment: "confirmed", skipPreflight: true },
+    { commitment: "confirmed" },
   );
 
   // Verify the TX didn't fail silently

@@ -116,10 +116,21 @@ export async function executeTool(
   switch (name) {
     case "check_lp_position":
       return executors.check_lp_position();
-    case "update_lp_status":
+    case "update_lp_status": {
+      const i = input as Record<string, unknown>;
+      if (
+        typeof i.active_bin !== "number" ||
+        typeof i.fee_x !== "number" ||
+        typeof i.fee_y !== "number"
+      ) {
+        throw new Error(
+          "Invalid tool input: active_bin, fee_x, fee_y must be numbers",
+        );
+      }
       return executors.update_lp_status(
-        input as { active_bin: number; fee_x: number; fee_y: number },
+        i as { active_bin: number; fee_x: number; fee_y: number },
       );
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

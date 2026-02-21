@@ -18,26 +18,21 @@ import {
   StyleSheet,
   RefreshControl,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
+import { useCallback } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
 import { useAgentUrl } from "@/hooks/useAgentUrl";
-
-function shortKey(key: string) {
-  return `${key.slice(0, 4)}…${key.slice(-4)}`;
-}
-
-function timeAgo(isoString: string) {
-  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  return `${Math.floor(diff / 3600)}h ago`;
-}
+import { colors, withAlpha } from "@/constants/theme";
+import { timeAgo, shortKey } from "@/utils/time";
 
 export default function Dashboard() {
   const router = useRouter();
-  const { url } = useAgentUrl();
-  const { connected, agentConfig, lastTick, history } = useAgentWebSocket(url);
+  const { url, token, reload } = useAgentUrl();
+  const { connected, agentConfig, lastTick, history } = useAgentWebSocket(url, token);
+
+  // Re-read AsyncStorage each time we navigate back to this screen
+  useFocusEffect(useCallback(() => { reload(); }, []));
 
   const isInRange = lastTick?.isInRange;
   const statusColor = !connected
@@ -114,9 +109,12 @@ export default function Dashboard() {
           {lastTick?.txSignature ? (
             <>
               <TouchableOpacity
-                onPress={() =>
-                  lastTick.explorerUrl && Linking.openURL(lastTick.explorerUrl)
-                }
+                onPress={() => {
+                  const url = lastTick.explorerUrl;
+                  if (url?.startsWith("https://explorer.solana.com/tx/")) {
+                    Linking.openURL(url);
+                  }
+                }}
               >
                 <Text style={styles.txLink}>
                   {shortKey(lastTick.txSignature)} ↗
@@ -165,7 +163,7 @@ export default function Dashboard() {
               Tick History ({history.length})
             </Text>
             {history.slice(0, 10).map((tick) => (
-              <View key={tick.tickNumber} style={styles.historyRow}>
+              <View key={tick.timestamp} style={styles.historyRow}>
                 <Text style={styles.historyTick}>#{tick.tickNumber}</Text>
                 <Text
                   style={[
@@ -211,17 +209,6 @@ function Row({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-
-const colors = {
-  bg: "#0a0a0a",
-  card: "#141414",
-  border: "#2a2a2a",
-  green: "#00d97e",
-  red: "#ff4d4f",
-  dim: "#555",
-  text: "#e0e0e0",
-  muted: "#888",
-};
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },

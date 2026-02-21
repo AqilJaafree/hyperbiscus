@@ -31,20 +31,20 @@ export interface AgentConfig {
   positionPubkey: PublicKey;
   checkIntervalMs: number;
   claudeModel: string;
+  /** Optional shared secret for WebSocket auth. If set, clients must send { type:"auth", token } first. */
+  wsSecret: string | null;
 }
 
 export function loadConfig(): AgentConfig {
   return {
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
     rpcUrl: process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
-    sessionKeypair: loadKeypair(
-      process.env.SESSION_KEYPAIR_PATH ?? "~/.config/solana/id.json",
-    ),
+    sessionKeypair: loadKeypair(required("SESSION_KEYPAIR_PATH")),
     sessionPda: new PublicKey(required("SESSION_PDA")),
     lbPair: new PublicKey(required("LB_PAIR")),
     positionPubkey: new PublicKey(required("POSITION_PUBKEY")),
     checkIntervalMs: parseInt(process.env.CHECK_INTERVAL_MS ?? "30000"),
-    claudeModel:
-      process.env.CLAUDE_MODEL ?? "claude-haiku-4-5-20251001",
+    claudeModel: process.env.CLAUDE_MODEL ?? "claude-haiku-4-5-20251001",
+    wsSecret: process.env.WS_SECRET ?? null,
   };
 }
