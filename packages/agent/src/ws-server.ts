@@ -1,19 +1,25 @@
 /**
- * ws-server.ts — WebSocket server broadcasting agent tick data to the mobile app.
+ * ws-server.ts — Bidirectional WebSocket server on port 18789.
  *
- * Runs on port 18789 (matching the MimiClaw ESP32 WebSocket server port).
- * Mobile connects via: ws://<laptop-ip>:18789
+ * Outbound (agent → mobile):
+ *   "connected"     — static session config, sent on client connect
+ *   "tick"          — live position data after every monitoring tick
+ *   "chat_response" — Claude's reply to a user chat message
+ *   "chat_thinking" — sent immediately when a chat message is received
  *
- * Messages:
- *   → "connected"  — sent on client connect; includes static session config
- *   → "tick"       — sent after every agent tick; includes live position data
+ * Inbound (mobile → agent):
+ *   "chat"          — user message to send to the agent
  */
 
 import { WebSocketServer, WebSocket } from "ws";
+import Anthropic from "@anthropic-ai/sdk";
 import { AgentConfig } from "./config";
 import { SolanaContext } from "./solana";
+import { handleChat } from "./chat";
 
 export const WS_PORT = 18789;
+
+// ── Outbound message types ────────────────────────────────────────────────────
 
 export interface ConnectedMessage {
   type: "connected";
@@ -40,12 +46,42 @@ export interface TickMessage {
   error: string | null;
 }
 
-export type WsMessage = ConnectedMessage | TickMessage;
+export interface ChatThinkingMessage {
+  type: "chat_thinking";
+}
 
-export function startWsServer(config: AgentConfig, ctx: SolanaContext): {
+export interface ChatResponseMessage {
+  type: "chat_response";
+  message: string;
+  timestamp: string;
+}
+
+export type WsOutbound =
+  | ConnectedMessage
+  | TickMessage
+  | ChatThinkingMessage
+  | ChatResponseMessage;
+
+// ── Inbound message types ─────────────────────────────────────────────────────
+
+export interface ChatInbound {
+  type: "chat";
+  message: string;
+}
+
+// ── Server ────────────────────────────────────────────────────────────────────
+
+export function startWsServer(
+  config: AgentConfig,
+  ctx: SolanaContext,
+  client: Anthropic,
+): {
   broadcast: (msg: TickMessage) => void;
+  getLastTick: () => TickMessage | null;
+  setLastTick: (tick: TickMessage) => void;
 } {
   const wss = new WebSocketServer({ port: WS_PORT });
+  let lastTick: TickMessage | null = null;
 
   const connectedPayload: ConnectedMessage = {
     type: "connected",
@@ -56,9 +92,71 @@ export function startWsServer(config: AgentConfig, ctx: SolanaContext): {
     intervalMs: config.checkIntervalMs,
   };
 
+  function send(ws: WebSocket, msg: WsOutbound) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }
+
+  function broadcastAll(msg: WsOutbound) {
+    const data = JSON.stringify(msg);
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
+      }
+    }
+  }
+
   wss.on("connection", (ws) => {
     console.log(`[ws] client connected (total: ${wss.clients.size})`);
-    ws.send(JSON.stringify(connectedPayload));
+
+    // Send static config immediately
+    send(ws, connectedPayload);
+
+    // Send last tick so client has data right away
+    if (lastTick) send(ws, lastTick);
+
+    ws.on("message", async (raw) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+
+      if (msg.type === "chat" && typeof msg.message === "string") {
+        const userMessage = msg.message.trim();
+        if (!userMessage) return;
+
+        console.log(`[chat] user: ${userMessage}`);
+
+        // Tell mobile the agent is thinking
+        broadcastAll({ type: "chat_thinking" });
+
+        try {
+          const reply = await handleChat(
+            client,
+            config,
+            ctx,
+            userMessage,
+            lastTick,
+          );
+          console.log(`[chat] agent: ${reply.slice(0, 80)}...`);
+          broadcastAll({
+            type: "chat_response",
+            message: reply,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (err: any) {
+          console.error("[chat] error:", err.message);
+          broadcastAll({
+            type: "chat_response",
+            message: `Error: ${err.message}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    });
 
     ws.on("close", () => {
       console.log(`[ws] client disconnected (total: ${wss.clients.size})`);
@@ -69,14 +167,12 @@ export function startWsServer(config: AgentConfig, ctx: SolanaContext): {
     console.log(`[ws] server listening on ws://localhost:${WS_PORT}`);
   });
 
-  function broadcast(msg: TickMessage) {
-    const data = JSON.stringify(msg);
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
-    }
-  }
-
-  return { broadcast };
+  return {
+    broadcast(tick: TickMessage) {
+      lastTick = tick;
+      broadcastAll(tick);
+    },
+    getLastTick: () => lastTick,
+    setLastTick: (tick) => { lastTick = tick; },
+  };
 }

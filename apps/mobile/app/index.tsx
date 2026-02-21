@@ -58,9 +58,14 @@ export default function Dashboard() {
             {connected ? "connected" : "disconnected"}
           </Text>
         </View>
-        <TouchableOpacity onPress={() => router.push("/settings")}>
-          <Text style={styles.settingsLink}>⚙</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 16 }}>
+          <TouchableOpacity onPress={() => router.push("/chat")}>
+            <Text style={styles.settingsLink}>💬</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push("/settings")}>
+            <Text style={styles.settingsLink}>⚙</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView

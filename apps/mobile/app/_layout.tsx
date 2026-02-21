@@ -14,6 +14,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "hyperbiscus" }} />
+        <Stack.Screen name="chat" options={{ title: "Chat" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
       </Stack>
     </>

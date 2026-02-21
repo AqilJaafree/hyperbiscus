@@ -35,7 +35,7 @@ async function main() {
   console.log(`[init] model       : ${config.claudeModel}`);
 
   // Start WebSocket server — mobile app connects here
-  const { broadcast } = startWsServer(config, ctx);
+  const { broadcast } = startWsServer(config, ctx, client);
   console.log(`[init] websocket   : ws://localhost:${WS_PORT}`);
   console.log(`\n[agent] Starting monitoring loop...\n`);
 

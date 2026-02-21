@@ -1,13 +1,15 @@
 /**
- * useAgentWebSocket — connects to the agent WebSocket server and delivers
- * live tick data to the UI.
+ * useAgentWebSocket — bidirectional connection to the agent WebSocket server.
  *
  * Reconnects automatically on disconnect (2s backoff).
  * Provides:
- *   connected    — whether the WS is currently open
- *   config       — static session config (from "connected" message)
- *   lastTick     — most recent tick payload
- *   history      — last 50 ticks (newest first)
+ *   connected      — WS is currently open
+ *   agentConfig    — static session config (from "connected" message)
+ *   lastTick       — most recent monitoring tick
+ *   history        — last 50 ticks (newest first)
+ *   chatMessages   — full chat thread (user + agent messages)
+ *   chatPending    — true while agent is thinking
+ *   sendChat(msg)  — send a message to the agent
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -35,6 +37,12 @@ export interface TickData {
   error: string | null;
 }
 
+export interface ChatMessage {
+  role: "user" | "agent";
+  message: string;
+  timestamp: string;
+}
+
 const MAX_HISTORY = 50;
 const RECONNECT_DELAY_MS = 2000;
 
@@ -43,6 +51,9 @@ export function useAgentWebSocket(url: string) {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [lastTick, setLastTick] = useState<TickData | null>(null);
   const [history, setHistory] = useState<TickData[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatPending, setChatPending] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmounted = useRef(false);
@@ -66,6 +77,7 @@ export function useAgentWebSocket(url: string) {
       if (unmounted.current) return;
       try {
         const msg = JSON.parse(event.data as string);
+
         if (msg.type === "connected") {
           setAgentConfig({
             sessionPda: msg.sessionPda,
@@ -74,6 +86,7 @@ export function useAgentWebSocket(url: string) {
             positionPubkey: msg.positionPubkey,
             intervalMs: msg.intervalMs,
           });
+
         } else if (msg.type === "tick") {
           const tick: TickData = {
             tickNumber: msg.tickNumber,
@@ -91,21 +104,34 @@ export function useAgentWebSocket(url: string) {
           };
           setLastTick(tick);
           setHistory((prev) => [tick, ...prev].slice(0, MAX_HISTORY));
+
+        } else if (msg.type === "chat_thinking") {
+          setChatPending(true);
+
+        } else if (msg.type === "chat_response") {
+          setChatPending(false);
+          setChatMessages((prev) => [
+            ...prev,
+            {
+              role: "agent",
+              message: msg.message,
+              timestamp: msg.timestamp,
+            },
+          ]);
         }
       } catch {
-        // ignore malformed messages
+        // ignore malformed
       }
     };
 
     ws.onclose = () => {
       if (unmounted.current) return;
       setConnected(false);
+      setChatPending(false);
       reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);
     };
 
-    ws.onerror = () => {
-      ws.close();
-    };
+    ws.onerror = () => { ws.close(); };
   }, [url]);
 
   useEffect(() => {
@@ -118,5 +144,26 @@ export function useAgentWebSocket(url: string) {
     };
   }, [connect]);
 
-  return { connected, agentConfig, lastTick, history };
+  const sendChat = useCallback((message: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    // Optimistically add user message to thread
+    setChatMessages((prev) => [
+      ...prev,
+      { role: "user", message, timestamp: new Date().toISOString() },
+    ]);
+
+    ws.send(JSON.stringify({ type: "chat", message }));
+  }, []);
+
+  return {
+    connected,
+    agentConfig,
+    lastTick,
+    history,
+    chatMessages,
+    chatPending,
+    sendChat,
+  };
 }
