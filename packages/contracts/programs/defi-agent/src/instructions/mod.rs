@@ -6,6 +6,8 @@ pub mod undelegate_session;
 pub mod execute_dlmm_swap;
 pub mod execute_dlmm_add_liquidity;
 pub mod execute_dlmm_close_position;
+pub mod register_lp_monitor;
+pub mod update_lp_status;
 
 // Anchor's #[program] macro needs `__client_accounts_*` types from each module
 // to be in the crate root scope. The `handler` name appears in all modules
@@ -27,3 +29,7 @@ pub use execute_dlmm_swap::*;
 pub use execute_dlmm_add_liquidity::*;
 #[allow(ambiguous_glob_reexports)]
 pub use execute_dlmm_close_position::*;
+#[allow(ambiguous_glob_reexports)]
+pub use register_lp_monitor::*;
+#[allow(ambiguous_glob_reexports)]
+pub use update_lp_status::*;

@@ -91,4 +91,29 @@ pub mod defi_agent {
     ) -> Result<()> {
         instructions::execute_dlmm_add_liquidity::handler(ctx, liquidity_parameter)
     }
+
+    /// [Base Layer] Register a Meteora DLMM position for on-chain status monitoring.
+    /// Signed by the session owner. Creates an LpPositionMonitor PDA that records
+    /// the monitored position's bin range and is updated by the ESP32 periodically.
+    pub fn register_lp_monitor(
+        ctx: Context<RegisterLpMonitor>,
+        lb_pair: Pubkey,
+        position: Pubkey,
+        min_bin_id: i32,
+        max_bin_id: i32,
+    ) -> Result<()> {
+        instructions::register_lp_monitor::handler(ctx, lb_pair, position, min_bin_id, max_bin_id)
+    }
+
+    /// [Base Layer] Checkpoint the current LP position status on-chain.
+    /// Signed by the ESP32 session key. Caller passes the current pool active bin
+    /// and unclaimed fee amounts read off-chain — updates is_in_range and fee snapshots.
+    pub fn update_lp_status(
+        ctx: Context<UpdateLpStatus>,
+        active_bin: i32,
+        fee_x: u64,
+        fee_y: u64,
+    ) -> Result<()> {
+        instructions::update_lp_status::handler(ctx, active_bin, fee_x, fee_y)
+    }
 }

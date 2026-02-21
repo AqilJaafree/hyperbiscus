@@ -224,6 +224,8 @@ The on-chain program (`packages/contracts/programs/defi-agent`) is an **Anchor 0
 | `execute_dlmm_swap` | Base Layer | CPI into Meteora DLMM to swap tokens — validates LP strategy scope + exposure cap |
 | `execute_dlmm_add_liquidity` | Base Layer | CPI into Meteora DLMM to add liquidity to an existing position |
 | `execute_dlmm_close_position` | Base Layer | CPI into Meteora DLMM — `remove_all_liquidity` then `close_position2` in sequence |
+| `register_lp_monitor` | Base Layer | Create an `LpPositionMonitor` PDA — registers a DLMM position's bin range for on-chain status tracking |
+| `update_lp_status` | Base Layer | Checkpoint current LP position status — session key passes current active bin + fee amounts read off-chain |
 
 ### AgentSession State
 
@@ -237,6 +239,23 @@ is_active      bool     — can be deactivated by owner
 strategy_mask  u8       — bitmask of enabled strategies (bit0=LP, bit1=yield, bit2=liquidation)
 total_actions  u64      — total action count
 last_action_at i64      — timestamp of last action
+```
+
+### LpPositionMonitor State
+
+Seeds: `[b"lp_monitor", session.key()]`
+
+```
+session          Pubkey   — owning AgentSession
+lb_pair          Pubkey   — Meteora DLMM pool being monitored
+position         Pubkey   — DLMM position account
+min_bin_id       i32      — position's lower bin boundary (inclusive)
+max_bin_id       i32      — position's upper bin boundary (inclusive)
+last_active_bin  i32      — pool active bin at last update_lp_status call
+is_in_range      bool     — whether last_active_bin ∈ [min_bin_id, max_bin_id]
+fee_x_snapshot   u64      — unclaimed fee X at last checkpoint
+fee_y_snapshot   u64      — unclaimed fee Y at last checkpoint
+last_checked_at  i64      — Unix timestamp of last update
 ```
 
 ---
@@ -272,6 +291,16 @@ Get devnet SOL from [faucet.solana.com](https://faucet.solana.com). The wallet p
 | 7 | Commit state to base layer — without undelegating | Ephemeral Rollup |
 | 8 | Undelegate session back to base layer | Ephemeral Rollup |
 
+### lp-monitor.ts — LP Position Monitoring
+
+| # | Test | Layer |
+|---|---|---|
+| 1 | Register LP position for monitoring — create `LpPositionMonitor` PDA | Base (devnet) |
+| 2 | Check LP position status off-chain — `checkLpPosition()` returns in-range=true | Off-chain RPC |
+| 3 | Update LP status on-chain (in-range) — checkpoint active bin + fees | Base (devnet) |
+| 4 | Detect out-of-range — simulated active bin outside position range, `is_in_range=false` | Base (devnet) |
+| 5 | Reject invalid bin range — `min_bin_id > max_bin_id` fails with `InvalidBinRange` | Base (devnet) |
+
 ### meteora-dlmm.ts — Real Meteora DLMM CPI
 
 | # | Test | Layer |
@@ -305,7 +334,7 @@ Get devnet SOL from [faucet.solana.com](https://faucet.solana.com). The wallet p
 - [x] MimiClaw base integration (ReAct loop, memory, cron, tool calling)
 - [x] Solana session key management via MagicBlock (AgentSession PDA, delegation, ER execution)
 - [x] Meteora DLMM LP execution (swap, add liquidity, close position via CPI)
-- [ ] LP position monitoring (detect out-of-range, fee accrual tracking)
+- [x] LP position monitoring (detect out-of-range, fee accrual tracking)
 - [ ] Yield optimization tool (Marginfi / Solend rate switching)
 - [ ] Liquidation protection tool (leveraged position health monitoring)
 - [ ] ESP32-S3 firmware agent (ESP-IDF + MimiClaw integration)

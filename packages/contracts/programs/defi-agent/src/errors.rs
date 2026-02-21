@@ -19,4 +19,7 @@ pub enum AgentError {
 
     #[msg("Arithmetic overflow")]
     Overflow,
+
+    #[msg("min_bin_id must be <= max_bin_id")]
+    InvalidBinRange,
 }
