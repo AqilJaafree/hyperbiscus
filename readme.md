@@ -205,7 +205,12 @@ Open Telegram, message your bot, and approve your first session key scope from t
 
 The on-chain program (`packages/contracts/programs/defi-agent`) is an **Anchor 0.32 program** deployed on Solana devnet. It enforces the session key security model and CPIs into external DeFi protocols on behalf of the scoped session key.
 
-**Program ID:** `8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT`
+### Deployed Addresses
+
+| Program | Network | Address |
+|---|---|---|
+| `defi-agent` | Solana devnet | [`8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT`](https://explorer.solana.com/address/8reNvTG6PLT4sf4nGbT7VjZ1YqEGXzASkjcSQmQTkJPT?cluster=devnet) |
+| Meteora DLMM | mainnet + devnet | [`LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo`](https://explorer.solana.com/address/LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) |
 
 ### Instructions
 
