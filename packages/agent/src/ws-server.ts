@@ -12,12 +12,25 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
+import { timingSafeEqual } from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { AgentConfig } from "./config";
 import { SolanaContext } from "./solana";
 import { handleChat } from "./chat";
+import { handleAddLiquidity, ActionStep } from "./actions";
+import { PositionSnapshot } from "./tools";
 
 export const WS_PORT = 18789;
+const MAX_CHAT_MESSAGE_LENGTH = 4096; // characters — reject oversized payloads
+const AUTH_TIMEOUT_MS = 5000;         // disconnect unauthenticated clients after this
+const CHAT_RATE_LIMIT_MS = 3000;      // minimum ms between chat requests per connection
+
+/** Constant-time string comparison — prevents timing oracle on WS_SECRET. */
+function tokenEqual(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // ── Outbound message types ────────────────────────────────────────────────────
 
@@ -50,9 +63,20 @@ export interface ChatThinkingMessage {
   type: "chat_thinking";
 }
 
+export interface ChatTokenMessage {
+  type: "chat_token";
+  token: string;
+}
+
 export interface ChatResponseMessage {
   type: "chat_response";
   message: string;
+  timestamp: string;
+  position?: PositionSnapshot;
+}
+
+export interface ActionStepMessage extends ActionStep {
+  type: "action_step";
   timestamp: string;
 }
 
@@ -60,7 +84,9 @@ export type WsOutbound =
   | ConnectedMessage
   | TickMessage
   | ChatThinkingMessage
-  | ChatResponseMessage;
+  | ChatTokenMessage
+  | ChatResponseMessage
+  | ActionStepMessage;
 
 // ── Inbound message types ─────────────────────────────────────────────────────
 
@@ -80,7 +106,7 @@ export function startWsServer(
   getLastTick: () => TickMessage | null;
   setLastTick: (tick: TickMessage) => void;
 } {
-  const wss = new WebSocketServer({ port: WS_PORT, maxPayload: 64 * 1024 }); // 64 KB max frame
+  const wss = new WebSocketServer({ host: config.wsHost, port: WS_PORT, maxPayload: 64 * 1024 }); // 64 KB max frame
   let lastTick: TickMessage | null = null;
 
   const connectedPayload: ConnectedMessage = {
@@ -109,7 +135,19 @@ export function startWsServer(
 
   // Track which connections have passed auth
   const authenticated = new WeakSet<WebSocket>();
+  // Per-connection chat state: busy flag and rate-limit timestamp
+  const chatBusy = new WeakSet<WebSocket>();
+  const chatCooldown = new WeakMap<WebSocket, number>();
+  // Global action lock — prevents concurrent add_liquidity executions
+  let actionInFlight = false;
+
   const secret = config.wsSecret;
+  if (!secret) {
+    console.warn(
+      "[ws] WARNING: WS_SECRET is not set — server accepts unauthenticated connections. " +
+      "Set WS_SECRET in .env for LAN or internet-exposed deployments.",
+    );
+  }
 
   function isAuthenticated(ws: WebSocket): boolean {
     return !secret || authenticated.has(ws);
@@ -134,7 +172,7 @@ export function startWsServer(
           console.warn("[ws] auth timeout — closing unauthenticated connection");
           ws.close(1008, "auth timeout");
         }
-      }, 5000);
+      }, AUTH_TIMEOUT_MS);
       ws.on("close", () => clearTimeout(authTimeout));
     }
 
@@ -146,9 +184,10 @@ export function startWsServer(
         return;
       }
 
-      // Handle auth handshake
+      // Handle auth handshake — ignore if already authenticated
       if (msg.type === "auth") {
-        if (secret && msg.token === secret) {
+        if (authenticated.has(ws)) return;
+        if (secret && typeof msg.token === "string" && tokenEqual(msg.token, secret)) {
           authorizeAndGreet(ws);
         } else {
           console.warn("[ws] invalid auth token — closing connection");
@@ -165,7 +204,21 @@ export function startWsServer(
 
       if (msg.type === "chat" && typeof msg.message === "string") {
         const userMessage = msg.message.trim();
-        if (!userMessage || userMessage.length > 4096) return;
+        if (!userMessage || userMessage.length > MAX_CHAT_MESSAGE_LENGTH) return;
+
+        // Rate limit: reject if another chat is in progress or cooldown hasn't elapsed
+        if (chatBusy.has(ws)) {
+          console.warn("[chat] rejected — previous request still in progress");
+          return;
+        }
+        const cooldownUntil = chatCooldown.get(ws) ?? 0;
+        if (Date.now() < cooldownUntil) {
+          console.warn(`[chat] rejected — rate limited (${Math.ceil((cooldownUntil - Date.now()) / 1000)}s remaining)`);
+          return;
+        }
+
+        chatBusy.add(ws);
+        chatCooldown.set(ws, Date.now() + CHAT_RATE_LIMIT_MS);
 
         // Log truncated — never log full user message content
         console.log(`[chat] user (${userMessage.length} chars)`);
@@ -174,18 +227,22 @@ export function startWsServer(
         broadcastAll({ type: "chat_thinking" });
 
         try {
+          let positionSnapshot: PositionSnapshot | undefined;
           const reply = await handleChat(
             client,
             config,
             ctx,
             userMessage,
             lastTick,
+            (token) => send(ws, { type: "chat_token", token }),
+            (snap) => { positionSnapshot = snap; },
           );
           console.log(`[chat] agent replied (${reply.length} chars)`);
           broadcastAll({
             type: "chat_response",
             message: reply,
             timestamp: new Date().toISOString(),
+            ...(positionSnapshot ? { position: positionSnapshot } : {}),
           });
         } catch (err: any) {
           console.error("[chat] error:", err.message);
@@ -193,6 +250,33 @@ export function startWsServer(
             type: "chat_response",
             message: `Error: ${err.message}`,
             timestamp: new Date().toISOString(),
+          });
+        } finally {
+          chatBusy.delete(ws);
+        }
+      }
+
+      if (msg.type === "action" && typeof msg.action === "string") {
+        console.log(`[action] ${msg.action}`);
+        if (msg.action === "add_liquidity") {
+          // Concurrency guard — reject if an action is already in flight
+          if (actionInFlight) {
+            console.warn("[action] rejected — add_liquidity already in progress");
+            return;
+          }
+          actionInFlight = true;
+          handleAddLiquidity(config, ctx, (step) => {
+            const out: ActionStepMessage = {
+              type: "action_step",
+              timestamp: new Date().toISOString(),
+              ...step,
+            };
+            console.log(`[action] step ${step.step}/${step.total} [${step.status}] ${step.label}`);
+            broadcastAll(out);
+          }).catch((err) => {
+            console.error("[action] unhandled error:", err.message);
+          }).finally(() => {
+            actionInFlight = false;
           });
         }
       }
@@ -204,7 +288,7 @@ export function startWsServer(
   });
 
   wss.on("listening", () => {
-    console.log(`[ws] server listening on ws://localhost:${WS_PORT}`);
+    console.log(`[ws] server listening on ws://${config.wsHost}:${WS_PORT}`);
   });
 
   return {

@@ -1,258 +1,528 @@
 /**
- * Dashboard — live LP position monitor.
+ * Chat — main tab, talk to the DeFi agent.
  *
- * Connects to the agent WebSocket on port 18789 and displays:
- *   • IN RANGE / OUT OF RANGE status badge
- *   • Active bin vs position range
- *   • Unclaimed fees (X + Y)
- *   • Last checkpoint TX with explorer link
- *   • Tick history
+ * Renders three message types in a single thread:
+ *   "user"   — messages the user sends
+ *   "agent"  — Claude's replies
+ *   "action" — live transaction flow cards (e.g. add_liquidity)
  */
 
 import {
   View,
   Text,
-  ScrollView,
+  TextInput,
   TouchableOpacity,
-  Linking,
+  FlatList,
   StyleSheet,
-  RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Linking,
 } from "react-native";
-import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
-import { useAgentUrl } from "@/hooks/useAgentUrl";
+import { useRef, useState, useEffect } from "react";
+import { useAgent, useReloadOnFocus } from "@/context/AgentContext";
+import { ChatMessage, ActionStep, PositionSnapshot } from "@/hooks/useAgentWebSocket";
 import { colors, withAlpha } from "@/constants/theme";
-import { timeAgo, shortKey } from "@/utils/time";
+import { UI } from "@/constants/config";
+import { formatTime } from "@/utils/time";
 
-export default function Dashboard() {
-  const router = useRouter();
-  const { url, token, reload } = useAgentUrl();
-  const { connected, agentConfig, lastTick, history } = useAgentWebSocket(url, token);
+export default function Chat() {
+  const { connected, chatMessages, chatPending, streamingText, actionFlows, sendChat } =
+    useAgent();
+  useReloadOnFocus();
 
-  // Re-read AsyncStorage each time we navigate back to this screen
-  useFocusEffect(useCallback(() => { reload(); }, []));
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<FlatList>(null);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isInRange = lastTick?.isInRange;
-  const statusColor = !connected
-    ? colors.dim
-    : isInRange === null
-    ? colors.dim
-    : isInRange
-    ? colors.green
-    : colors.red;
+  useEffect(() => {
+    if (chatMessages.length > 0 || chatPending || streamingText) {
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+      scrollTimer.current = setTimeout(
+        () => listRef.current?.scrollToEnd({ animated: true }),
+        UI.SCROLL_DELAY_MS,
+      );
+    }
+    return () => {
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    };
+  }, [chatMessages.length, chatPending, streamingText, actionFlows]);
+
+  function submit() {
+    const msg = draft.trim();
+    if (!msg || chatPending || !connected) return;
+    setDraft("");
+    sendChat(msg);
+  }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["bottom"]}>
-      {/* Header row */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={[styles.dot, { backgroundColor: connected ? colors.green : colors.red }]} />
-          <Text style={styles.headerStatus}>
-            {connected ? "connected" : "disconnected"}
-          </Text>
-        </View>
-        <View style={{ flexDirection: "row", gap: 16 }}>
-          <TouchableOpacity onPress={() => router.push("/chat")}>
-            <Text style={styles.settingsLink}>💬</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push("/settings")}>
-            <Text style={styles.settingsLink}>⚙</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={false} tintColor={colors.dim} />}
+    <SafeAreaView style={styles.safe} edges={[]}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === "ios" ? UI.KEYBOARD_OFFSET_IOS : 0}
       >
-        {/* Status badge */}
-        <View style={[styles.badge, { borderColor: statusColor }]}>
-          <Text style={[styles.badgeText, { color: statusColor }]}>
-            {!connected
-              ? "CONNECTING…"
-              : isInRange === null
-              ? "WAITING"
-              : isInRange
-              ? "IN RANGE"
-              : "⚠ OUT OF RANGE"}
-          </Text>
-        </View>
-
-        {/* Bin info */}
-        <View style={styles.card}>
-          <Row
-            label="Active bin"
-            value={lastTick?.activeBin?.toString() ?? "—"}
-          />
-          <Row
-            label="Position range"
-            value={
-              lastTick
-                ? `[${lastTick.positionMinBin}, ${lastTick.positionMaxBin}]`
-                : "—"
-            }
-          />
-        </View>
-
-        {/* Fees */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Unclaimed Fees</Text>
-          <Row label="Token X" value={lastTick?.feeX ?? "—"} />
-          <Row label="Token Y" value={lastTick?.feeY ?? "—"} />
-        </View>
-
-        {/* Last checkpoint */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Last Checkpoint</Text>
-          {lastTick?.txSignature ? (
-            <>
-              <TouchableOpacity
-                onPress={() => {
-                  const url = lastTick.explorerUrl;
-                  if (url?.startsWith("https://explorer.solana.com/tx/")) {
-                    Linking.openURL(url);
-                  }
-                }}
-              >
-                <Text style={styles.txLink}>
-                  {shortKey(lastTick.txSignature)} ↗
-                </Text>
-              </TouchableOpacity>
-              <Text style={styles.dim}>{timeAgo(lastTick.timestamp)}</Text>
-            </>
-          ) : (
-            <Text style={styles.dim}>—</Text>
-          )}
-        </View>
-
-        {/* Session info */}
-        {agentConfig && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Session</Text>
-            <Row label="Session PDA" value={shortKey(agentConfig.sessionPda)} />
-            <Row label="Monitor PDA" value={shortKey(agentConfig.monitorPda)} />
-            <Row
-              label="Interval"
-              value={`${agentConfig.intervalMs / 1000}s`}
-            />
+        {!connected && (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>Disconnected — reconnecting…</Text>
           </View>
         )}
 
-        {/* Claude summary */}
-        {lastTick?.summary ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Agent Summary</Text>
-            <Text style={styles.summary}>{lastTick.summary}</Text>
-          </View>
-        ) : null}
-
-        {/* Error */}
-        {lastTick?.error ? (
-          <View style={[styles.card, { borderColor: colors.red }]}>
-            <Text style={[styles.cardTitle, { color: colors.red }]}>Error</Text>
-            <Text style={styles.errorText}>{lastTick.error}</Text>
-          </View>
-        ) : null}
-
-        {/* History */}
-        {history.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>
-              Tick History ({history.length})
-            </Text>
-            {history.slice(0, 10).map((tick) => (
-              <View key={tick.timestamp} style={styles.historyRow}>
-                <Text style={styles.historyTick}>#{tick.tickNumber}</Text>
-                <Text
-                  style={[
-                    styles.historyStatus,
-                    {
-                      color:
-                        tick.isInRange === null
-                          ? colors.dim
-                          : tick.isInRange
-                          ? colors.green
-                          : colors.red,
-                    },
-                  ]}
-                >
-                  {tick.isInRange === null
-                    ? "—"
-                    : tick.isInRange
-                    ? "✓"
-                    : "⚠"}
-                </Text>
-                <Text style={styles.historyBin}>
-                  bin {tick.activeBin ?? "—"}
-                </Text>
-                <Text style={styles.dim}>{timeAgo(tick.timestamp)}</Text>
-              </View>
+        {chatMessages.length === 0 && !chatPending && !streamingText ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>Chat with your agent</Text>
+            <Text style={styles.emptyHint}>Try asking:</Text>
+            {SUGGESTIONS.map((s) => (
+              <TouchableOpacity
+                key={s}
+                style={styles.suggestion}
+                onPress={() => sendChat(s)}
+                disabled={!connected}
+              >
+                <Text style={styles.suggestionText}>{s}</Text>
+              </TouchableOpacity>
             ))}
           </View>
+        ) : (
+          <FlatList
+            ref={listRef}
+            style={styles.flex}
+            data={chatMessages}
+            keyExtractor={(item, i) => `${item.role}-${item.timestamp}-${i}`}
+            contentContainerStyle={styles.thread}
+            extraData={actionFlows}
+            renderItem={({ item }) => {
+              if (item.role === "action" && item.actionId) {
+                const steps = Object.values(
+                  actionFlows[item.actionId] ?? {},
+                ).sort((a, b) => a.step - b.step);
+                return (
+                  <ActionFlowCard
+                    action={item.message}
+                    steps={steps}
+                    timestamp={item.timestamp}
+                  />
+                );
+              }
+              if (item.role === "position" && item.position) {
+                return <PositionCard data={item.position} timestamp={item.timestamp} />;
+              }
+              return <ChatBubble item={item} />;
+            }}
+          />
         )}
 
-        <Text style={styles.footer}>
-          {lastTick ? `Tick #${lastTick.tickNumber} · ${timeAgo(lastTick.timestamp)}` : "Waiting for first tick…"}
-        </Text>
-      </ScrollView>
+        {/* Spinner while thinking (tool calls), then live streaming text */}
+        {streamingText ? (
+          <View style={[styles.bubble, styles.bubbleAgent, styles.streamingBubble]}>
+            <Text style={[styles.bubbleText, styles.bubbleTextAgent]}>{stripMarkdown(streamingText)}</Text>
+          </View>
+        ) : chatPending ? (
+          <View style={styles.thinking}>
+            <ActivityIndicator size="small" color={colors.green} />
+            <Text style={styles.thinkingText}>Agent is thinking…</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.inputBar}>
+          <TextInput
+            style={styles.input}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Ask the agent…"
+            placeholderTextColor={colors.dim}
+            multiline
+            returnKeyType="send"
+            onSubmitEditing={submit}
+            editable={connected}
+          />
+          <TouchableOpacity
+            style={[
+              styles.sendBtn,
+              (!draft.trim() || chatPending || !connected) &&
+                styles.sendBtnDisabled,
+            ]}
+            onPress={submit}
+            disabled={!draft.trim() || chatPending || !connected}
+          >
+            <Text style={styles.sendBtnText}>↑</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+// ── Sub-components ──────────────────────────────────────────────────────────
+
+/** Strip common markdown so raw asterisks never show in chat bubbles. */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "$1")   // **bold**
+    .replace(/\*(.*?)\*/g, "$1")        // *italic*
+    .replace(/^#{1,6}\s+/gm, "")        // # headings
+    .replace(/`([^`]+)`/g, "$1")        // `code`
+    .trim();
+}
+
+function ChatBubble({ item }: { item: ChatMessage }) {
+  const isUser = item.role === "user";
+  const text = isUser ? item.message : stripMarkdown(item.message);
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
+    <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAgent]}>
+      <Text
+        style={[
+          styles.bubbleText,
+          isUser ? styles.bubbleTextUser : styles.bubbleTextAgent,
+        ]}
+      >
+        {text}
+      </Text>
+      <Text style={styles.bubbleTime}>{formatTime(item.timestamp)}</Text>
     </View>
   );
 }
 
+function PositionCard({ data, timestamp }: { data: PositionSnapshot; timestamp: string }) {
+  const color = data.isInRange ? colors.green : colors.red;
+  return (
+    <View style={[pos.card, { borderColor: withAlpha(color, 0.35) }]}>
+      <View style={pos.header}>
+        <View style={[pos.dot, { backgroundColor: color }]} />
+        <Text style={[pos.status, { color }]}>
+          {data.isInRange ? "IN RANGE" : "OUT OF RANGE"}
+        </Text>
+        <Text style={pos.time}>{formatTime(timestamp)}</Text>
+      </View>
+      <View style={pos.row}>
+        <View style={pos.cell}>
+          <Text style={pos.val}>{data.activeBin}</Text>
+          <Text style={pos.key}>Active Bin</Text>
+        </View>
+        <View style={pos.cell}>
+          <Text style={pos.val}>{data.positionMinBin}</Text>
+          <Text style={pos.key}>Min</Text>
+        </View>
+        <View style={pos.cell}>
+          <Text style={pos.val}>{data.positionMaxBin}</Text>
+          <Text style={pos.key}>Max</Text>
+        </View>
+      </View>
+      <View style={pos.row}>
+        <View style={pos.cell}>
+          <Text style={pos.val}>{data.feeX}</Text>
+          <Text style={pos.key}>Fee X</Text>
+        </View>
+        <View style={pos.cell}>
+          <Text style={pos.val}>{data.feeY}</Text>
+          <Text style={pos.key}>Fee Y</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ActionFlowCard({
+  action,
+  steps,
+  timestamp,
+}: {
+  action: string;
+  steps: ActionStep[];
+  timestamp: string;
+}) {
+  const total = steps[0]?.total ?? 4;
+  const done = steps.every((s) => s.status !== "pending");
+  const hasError = steps.some((s) => s.status === "error");
+
+  const headerColor = hasError
+    ? colors.red
+    : done
+    ? colors.green
+    : colors.muted;
+
+  return (
+    <View style={flow.card}>
+      {/* Header */}
+      <View style={flow.header}>
+        <View style={[flow.headerDot, { backgroundColor: headerColor }]} />
+        <Text style={flow.headerTitle}>
+          {ACTION_LABELS[action] ?? action}
+        </Text>
+        <Text style={flow.headerTime}>{formatTime(timestamp)}</Text>
+      </View>
+
+      {/* Steps */}
+      {Array.from({ length: total }, (_, i) => i + 1).map((n) => {
+        const step = steps.find((s) => s.step === n);
+        return (
+          <StepRow
+            key={n}
+            number={n}
+            total={total}
+            step={step}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function StepRow({
+  number,
+  total,
+  step,
+}: {
+  number: number;
+  total: number;
+  step?: ActionStep;
+}) {
+  const status = step?.status ?? "waiting";
+  const isLast = number === total;
+
+  return (
+    <View style={flow.stepRow}>
+      {/* Connector line + icon */}
+      <View style={flow.stepLeft}>
+        <StepIcon status={status} />
+        {!isLast && <View style={flow.connector} />}
+      </View>
+
+      {/* Content */}
+      <View style={flow.stepContent}>
+        <Text style={[flow.stepLabel, status === "error" && { color: colors.red }]}>
+          {step?.label ?? `Step ${number}`}
+        </Text>
+        {step?.detail && (
+          <Text style={flow.stepDetail}>{step.detail}</Text>
+        )}
+        {step?.txSignature && (
+          <TouchableOpacity
+            onPress={() => step.txUrl && Linking.openURL(step.txUrl)}
+            disabled={!step.txUrl}
+          >
+            <Text style={[flow.stepTx, !step.txUrl && { opacity: 0.4 }]}>
+              {step.txSignature.slice(0, 6)}…{step.txSignature.slice(-6)}{step.txUrl ? " ↗" : ""}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function StepIcon({ status }: { status: ActionStep["status"] | "waiting" }) {
+  if (status === "pending") {
+    return (
+      <View style={[icon.circle, { borderColor: colors.green }]}>
+        <ActivityIndicator size="small" color={colors.green} style={icon.spinner} />
+      </View>
+    );
+  }
+  if (status === "success") {
+    return (
+      <View style={[icon.circle, { backgroundColor: withAlpha(colors.green, 0.15), borderColor: colors.green }]}>
+        <Text style={[icon.glyph, { color: colors.green }]}>✓</Text>
+      </View>
+    );
+  }
+  if (status === "error") {
+    return (
+      <View style={[icon.circle, { backgroundColor: withAlpha(colors.red, 0.15), borderColor: colors.red }]}>
+        <Text style={[icon.glyph, { color: colors.red }]}>✕</Text>
+      </View>
+    );
+  }
+  // waiting
+  return (
+    <View style={[icon.circle, { borderColor: colors.border }]}>
+      <View style={icon.waitDot} />
+    </View>
+  );
+}
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+const SUGGESTIONS = [
+  "What's the current position status?",
+  "Are my fees worth harvesting?",
+  "How long has the position been in range?",
+  "Check the position and give me a fresh reading",
+];
+
+const ACTION_LABELS: Record<string, string> = {
+  add_liquidity: "Add Liquidity · MagicBlock ER Flow",
+};
+
+// ── Styles ──────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  flex: { flex: 1 },
+  banner: {
+    backgroundColor: withAlpha(colors.red, 0.13),
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  headerStatus: { color: colors.muted, fontSize: 13 },
-  settingsLink: { color: colors.muted, fontSize: 20 },
-  scroll: { padding: 16, gap: 12 },
-  badge: {
-    borderWidth: 2,
-    borderRadius: 12,
-    paddingVertical: 20,
+    borderColor: withAlpha(colors.red, 0.27),
+    padding: 10,
     alignItems: "center",
-    marginBottom: 4,
   },
-  badgeText: { fontSize: 28, fontWeight: "800", letterSpacing: 2 },
-  card: {
+  bannerText: { color: colors.red, fontSize: 13 },
+  empty: { flex: 1, padding: 24, gap: 12, justifyContent: "center" },
+  emptyTitle: { color: colors.text, fontSize: 20, fontWeight: "700", marginBottom: 4 },
+  emptyHint: { color: colors.muted, fontSize: 14 },
+  suggestion: {
     backgroundColor: colors.card,
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
+    padding: 12,
   },
-  cardTitle: { color: colors.muted, fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
-  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  rowLabel: { color: colors.muted, fontSize: 14 },
-  rowValue: { color: colors.text, fontSize: 14, fontWeight: "500" },
-  txLink: { color: "#4da6ff", fontSize: 14, fontWeight: "500" },
-  dim: { color: colors.dim, fontSize: 12 },
-  summary: { color: colors.text, fontSize: 14, lineHeight: 20 },
-  errorText: { color: colors.red, fontSize: 13 },
-  historyRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 2 },
-  historyTick: { color: colors.dim, fontSize: 12, width: 36 },
-  historyStatus: { fontSize: 14, width: 16 },
-  historyBin: { color: colors.muted, fontSize: 12, flex: 1 },
-  footer: { color: colors.dim, fontSize: 12, textAlign: "center", marginTop: 8 },
+  suggestionText: { color: colors.muted, fontSize: 14 },
+  thread: { padding: 16, gap: 10, flexGrow: 1, justifyContent: "flex-end" },
+  bubble: { maxWidth: "80%", borderRadius: 14, padding: 12, gap: 4, marginBottom: 6 },
+  bubbleUser: {
+    backgroundColor: withAlpha(colors.user, 0.13),
+    borderWidth: 1,
+    borderColor: withAlpha(colors.user, 0.33),
+    alignSelf: "flex-end",
+  },
+  bubbleAgent: {
+    backgroundColor: colors.agent,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignSelf: "flex-start",
+  },
+  bubbleText: { fontSize: 15, lineHeight: 21 },
+  bubbleTextUser: { color: colors.green },
+  bubbleTextAgent: { color: colors.text },
+  bubbleTime: { color: colors.dim, fontSize: 11, alignSelf: "flex-end" },
+  thinking: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    alignSelf: "flex-start",
+  },
+  thinkingText: { color: colors.muted, fontSize: 13 },
+  streamingBubble: {
+    marginHorizontal: 16,
+    marginBottom: 4,
+    maxWidth: "80%",
+  },
+  inputBar: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    padding: 12,
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    color: colors.text,
+    fontSize: 15,
+    maxHeight: 120,
+  },
+  sendBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendBtnDisabled: { opacity: 0.3 },
+  sendBtnText: { color: "#000", fontSize: 20, fontWeight: "800", lineHeight: 22 },
+});
+
+const pos = StyleSheet.create({
+  card: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+    alignSelf: "stretch",
+    backgroundColor: colors.card,
+    marginBottom: 6,
+  },
+  header: { flexDirection: "row", alignItems: "center", gap: 8 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  status: { flex: 1, fontSize: 13, fontWeight: "700", letterSpacing: 0.5 },
+  time: { color: colors.dim, fontSize: 11 },
+  row: { flexDirection: "row", gap: 8 },
+  cell: { flex: 1, alignItems: "center", gap: 2 },
+  val: { color: colors.text, fontSize: 15, fontWeight: "600", fontVariant: ["tabular-nums"] as any },
+  key: { color: colors.dim, fontSize: 11 },
+});
+
+const flow = StyleSheet.create({
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: withAlpha(colors.green, 0.3),
+    padding: 14,
+    gap: 0,
+    alignSelf: "stretch",
+    marginBottom: 6,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 14,
+  },
+  headerDot: { width: 8, height: 8, borderRadius: 4 },
+  headerTitle: { color: colors.text, fontSize: 13, fontWeight: "600", flex: 1 },
+  headerTime: { color: colors.dim, fontSize: 11 },
+  stepRow: {
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 40,
+  },
+  stepLeft: {
+    alignItems: "center",
+    width: 24,
+  },
+  connector: {
+    flex: 1,
+    width: 1.5,
+    backgroundColor: colors.border,
+    marginVertical: 3,
+  },
+  stepContent: {
+    flex: 1,
+    paddingBottom: 12,
+    gap: 3,
+  },
+  stepLabel: { color: colors.text, fontSize: 13, lineHeight: 18 },
+  stepDetail: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  stepTx: { color: "#4da6ff", fontSize: 12 },
+});
+
+const icon = StyleSheet.create({
+  circle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  spinner: { transform: [{ scale: 0.7 }] },
+  glyph: { fontSize: 12, fontWeight: "700", lineHeight: 14 },
+  waitDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.border,
+  },
 });

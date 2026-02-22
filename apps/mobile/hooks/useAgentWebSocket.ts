@@ -7,9 +7,11 @@
  *   agentConfig    — static session config (from "connected" message)
  *   lastTick       — most recent monitoring tick
  *   history        — last 50 ticks (newest first)
- *   chatMessages   — full chat thread (user + agent messages)
+ *   chatMessages   — full chat thread (user / agent / action messages)
  *   chatPending    — true while agent is thinking
- *   sendChat(msg)  — send a message to the agent
+ *   actionFlows    — map of actionId → steps[], updated live during action
+ *   sendChat(msg)  — send a chat message to the agent
+ *   sendAction(a)  — trigger an agent action (e.g. "add_liquidity")
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -38,11 +40,38 @@ export interface TickData {
   error: string | null;
 }
 
+export interface PositionSnapshot {
+  activeBin: number;
+  positionMinBin: number;
+  positionMaxBin: number;
+  isInRange: boolean;
+  feeX: string;
+  feeY: string;
+}
+
 export interface ChatMessage {
-  role: "user" | "agent";
+  role: "user" | "agent" | "action" | "position";
   message: string;
   timestamp: string;
+  /** Present when role === "action" */
+  actionId?: string;
+  /** Present when role === "position" */
+  position?: PositionSnapshot;
 }
+
+export interface ActionStep {
+  actionId: string;
+  step: number;
+  total: number;
+  label: string;
+  status: "pending" | "success" | "error";
+  txSignature?: string;
+  txUrl?: string;
+  detail?: string;
+}
+
+/** Map from actionId to the latest state of each step (keyed by step number) */
+export type ActionFlows = Record<string, Record<number, ActionStep>>;
 
 
 export function useAgentWebSocket(url: string, token: string = "") {
@@ -52,6 +81,8 @@ export function useAgentWebSocket(url: string, token: string = "") {
   const [history, setHistory] = useState<TickData[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatPending, setChatPending] = useState(false);
+  const [streamingText, setStreamingText] = useState("");
+  const [actionFlows, setActionFlows] = useState<ActionFlows>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,7 +96,6 @@ export function useAgentWebSocket(url: string, token: string = "") {
 
     ws.onopen = () => {
       if (unmounted.current) { ws.close(); return; }
-      // Send auth token if configured — server expects this as first message
       if (token) ws.send(JSON.stringify({ type: "auth", token }));
       setConnected(true);
       if (reconnectTimer.current) {
@@ -105,27 +135,78 @@ export function useAgentWebSocket(url: string, token: string = "") {
           };
           setLastTick(tick);
           setHistory((prev) => {
-            // deduplicate by timestamp to avoid key collisions on reconnect
             const deduped = prev.filter((t) => t.timestamp !== tick.timestamp);
             return [tick, ...deduped].slice(0, UI.MAX_HISTORY_ITEMS);
           });
 
         } else if (msg.type === "chat_thinking") {
           setChatPending(true);
+          setStreamingText("");
+
+        } else if (msg.type === "chat_token") {
+          // First token arrives — hide spinner, start showing live text
+          setChatPending(false);
+          setStreamingText((prev) => prev + (msg.token as string));
 
         } else if (msg.type === "chat_response") {
           setChatPending(false);
-          setChatMessages((prev) => [
+          setStreamingText("");
+          setChatMessages((prev) => {
+            const next: ChatMessage[] = [
+              ...prev,
+              { role: "agent", message: msg.message, timestamp: msg.timestamp },
+            ];
+            if (msg.position) {
+              next.push({
+                role: "position",
+                message: "",
+                timestamp: msg.timestamp,
+                position: msg.position,
+              });
+            }
+            return next;
+          });
+
+        } else if (msg.type === "action_step") {
+          const step: ActionStep = {
+            actionId: msg.actionId,
+            step: msg.step,
+            total: msg.total,
+            label: msg.label,
+            status: msg.status,
+            txSignature: msg.txSignature,
+            txUrl: msg.txUrl,
+            detail: msg.detail,
+          };
+
+          // Upsert into actionFlows map
+          setActionFlows((prev) => ({
             ...prev,
-            {
-              role: "agent",
-              message: msg.message,
-              timestamp: msg.timestamp,
+            [step.actionId]: {
+              ...(prev[step.actionId] ?? {}),
+              [step.step]: step,
             },
-          ]);
+          }));
+
+          // On first step arriving, add an "action" entry to the chat thread.
+          // Derive display label from actionId: "add_liq_1234" → "add_liquidity"
+          if (step.step === 1 && step.status === "pending") {
+            const actionLabel = step.actionId.startsWith("add_liq_")
+              ? "add_liquidity"
+              : step.actionId.replace(/_\d+$/, "");
+            setChatMessages((prev) => [
+              ...prev,
+              {
+                role: "action",
+                message: actionLabel,
+                timestamp: msg.timestamp,
+                actionId: step.actionId,
+              },
+            ]);
+          }
         }
       } catch {
-        // ignore malformed
+        // ignore malformed messages
       }
     };
 
@@ -152,14 +233,17 @@ export function useAgentWebSocket(url: string, token: string = "") {
   const sendChat = useCallback((message: string) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    // Optimistically add user message to thread
     setChatMessages((prev) => [
       ...prev,
       { role: "user", message, timestamp: new Date().toISOString() },
     ]);
-
     ws.send(JSON.stringify({ type: "chat", message }));
+  }, []);
+
+  const sendAction = useCallback((action: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "action", action }));
   }, []);
 
   return {
@@ -169,6 +253,9 @@ export function useAgentWebSocket(url: string, token: string = "") {
     history,
     chatMessages,
     chatPending,
+    streamingText,
+    actionFlows,
     sendChat,
+    sendAction,
   };
 }

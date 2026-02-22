@@ -33,6 +33,7 @@ async function main() {
   console.log(`[init] position    : ${config.positionPubkey.toBase58()}`);
   console.log(`[init] interval    : ${config.checkIntervalMs / 1000}s`);
   console.log(`[init] model       : ${config.claudeModel}`);
+  console.log(`[init] magicblock  : ${config.magicblockRpcUrl}`);
 
   // Start WebSocket server — mobile app connects here
   const { broadcast } = startWsServer(config, ctx, client);
@@ -44,7 +45,7 @@ async function main() {
   const tick = async () => {
     tickNumber++;
     try {
-      const result = await runTick(client, config, ctx, tickNumber);
+      const result = await runTick(config, ctx, tickNumber);
       broadcast(result);
     } catch (err: any) {
       console.error(`[tick ${tickNumber}] ERROR:`, err.message);

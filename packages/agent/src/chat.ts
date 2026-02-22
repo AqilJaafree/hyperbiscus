@@ -16,7 +16,7 @@ import { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { AgentConfig } from "./config";
 import { SolanaContext } from "./solana";
 import { TickMessage } from "./ws-server";
-import { TOOL_DEFINITIONS, buildToolExecutors, executeTool } from "./tools";
+import { CHAT_TOOL_DEFINITIONS, buildToolExecutors, executeTool, PositionSnapshot } from "./tools";
 import { loadSoul, loadRecentMemory, appendMemory, sanitizeMemoryEntry } from "./memory";
 
 export async function handleChat(
@@ -25,10 +25,12 @@ export async function handleChat(
   ctx: SolanaContext,
   userMessage: string,
   lastTick: TickMessage | null,
+  onToken?: (token: string) => void,
+  onPositionFetch?: (snapshot: PositionSnapshot) => void,
 ): Promise<string> {
   const soul = loadSoul();
   const recentMemory = loadRecentMemory();
-  const executors = buildToolExecutors(config, ctx);
+  const executors = buildToolExecutors(config, ctx, onPositionFetch);
 
   // Give Claude the current position state so it can answer without needing
   // to call check_lp_position unless the user asks for fresh data.
@@ -56,15 +58,21 @@ export async function handleChat(
   const MAX_REACT_ITERATIONS = 10;
   let iterations = 0;
 
-  // ReAct loop — Claude may call tools if it needs fresh data
+  // ReAct loop — Claude may call tools if it needs fresh data.
+  // Uses streaming: onToken fires for each text delta (only on the final
+  // end_turn response — tool_use turns produce no text tokens).
   while (iterations++ < MAX_REACT_ITERATIONS) {
-    const response = await client.messages.create({
+    const stream = client.messages.stream({
       model: config.claudeModel,
       max_tokens: 1024,
       system: soul,
-      tools: TOOL_DEFINITIONS,
+      tools: CHAT_TOOL_DEFINITIONS,
       messages,
     });
+
+    if (onToken) stream.on("text", onToken);
+
+    const response = await stream.finalMessage();
 
     if (response.stop_reason === "end_turn") {
       reply = response.content

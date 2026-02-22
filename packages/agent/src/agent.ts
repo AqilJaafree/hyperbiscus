@@ -1,135 +1,88 @@
 /**
- * agent.ts — Main agent tick logic: ReAct loop with Claude tool calling.
+ * agent.ts — API-free monitoring tick.
  *
- * Each tick:
- *   1. Build context from SOUL.md (system) + recent MEMORY.md (user context)
- *   2. Send to Claude with check_lp_position + update_lp_status tools
- *   3. Execute tool calls until Claude reaches end_turn
- *   4. Append Claude's summary to MEMORY.md
- *   5. Return TickResult for broadcasting over WebSocket
+ * No Claude API calls per tick. The logic is fully deterministic:
+ *   1. Read LP position state from Solana RPC (no TX)
+ *   2. Submit on-chain status checkpoint (session key signs)
+ *   3. Build a simple summary string
+ *   4. Append summary to MEMORY.md (provides context for chat)
  *
- * This mirrors MimiClaw's ReAct loop running on the ESP32-S3 in C.
- * On the real device this same logic runs every 30s via the cron scheduler.
+ * Claude is only invoked for user-initiated chat messages (see chat.ts).
+ * This matches the intended ESP32-S3 architecture where the microcontroller
+ * runs the monitoring loop in C without any LLM API calls.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import { checkLpPosition } from "@hyperbiscus/shared";
 import { AgentConfig } from "./config";
-import { SolanaContext } from "./solana";
+import { DELEGATION_PROGRAM_ID } from "./constants";
+import { SolanaContext, submitUpdateLpStatus } from "./solana";
 import { TickMessage } from "./ws-server";
-import {
-  TOOL_DEFINITIONS,
-  buildToolExecutors,
-  executeTool,
-} from "./tools";
-import { loadSoul, loadRecentMemory, appendMemory } from "./memory";
+import { appendMemory } from "./memory";
 
 export async function runTick(
-  client: Anthropic,
   config: AgentConfig,
   ctx: SolanaContext,
   tickNumber: number,
 ): Promise<TickMessage> {
-  const soul = loadSoul();
-  const recentMemory = loadRecentMemory();
-  const executors = buildToolExecutors(config, ctx);
   const timestamp = new Date().toISOString();
 
   console.log(`\n${"─".repeat(60)}`);
   console.log(`[tick ${tickNumber}] ${timestamp}`);
   console.log(`${"─".repeat(60)}`);
 
-  // Capture tool outputs for broadcasting
-  let checkResult: any = null;
-  let txResult: any = null;
+  // 1. Read current LP position from Solana RPC — no API call
+  const status = await checkLpPosition(
+    ctx.connection,
+    config.lbPair,
+    config.positionPubkey,
+    "devnet",
+  );
 
-  const messages: MessageParam[] = [
-    {
-      role: "user",
-      content:
-        `Tick ${tickNumber} — ${timestamp}\n\n` +
-        `Recent memory:\n${recentMemory}\n\n` +
-        `Check the LP position and update the on-chain status.`,
-    },
-  ];
+  const { activeBin, positionMinBin, positionMaxBin, isInRange, feeX, feeY } =
+    status;
 
-  let summary = "";
+  console.log(
+    `  position: bin ${activeBin} in [${positionMinBin}, ${positionMaxBin}]` +
+      ` → ${isInRange ? "IN RANGE ✓" : "OUT OF RANGE ⚠"}`,
+  );
+  console.log(`  fees: X=${feeX.toString()} Y=${feeY.toString()}`);
 
-  // ReAct loop — continues until Claude stops calling tools
-  while (true) {
-    const response = await client.messages.create({
-      model: config.claudeModel,
-      max_tokens: 1024,
-      system: soul,
-      tools: TOOL_DEFINITIONS,
-      messages,
-    });
+  // 2. Submit on-chain checkpoint — skip if session is still delegated to ER
+  let sig: string | null = null;
+  const sessionInfo = await ctx.connection.getAccountInfo(config.sessionPda);
+  const isDelegated = sessionInfo?.owner.equals(DELEGATION_PROGRAM_ID) ?? false;
 
-    if (response.stop_reason === "end_turn") {
-      summary = response.content
-        .filter((b) => b.type === "text")
-        .map((b) => (b as Anthropic.TextBlock).text)
-        .join("")
-        .trim();
-
-      if (summary) {
-        console.log(`\n[agent] ${summary}`);
-        appendMemory(summary);
-      }
-      break;
-    }
-
-    if (response.stop_reason === "tool_use") {
-      messages.push({ role: "assistant", content: response.content });
-
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
-
-        console.log(`  → tool: ${block.name}`, JSON.stringify(block.input));
-
-        let resultContent: string;
-        try {
-          const result = await executeTool(block.name, block.input, executors);
-          resultContent = JSON.stringify(result);
-          console.log(`  ← ${block.name}:`, resultContent);
-
-          // Capture outputs for WS broadcast
-          if (block.name === "check_lp_position") checkResult = result;
-          if (block.name === "update_lp_status") txResult = result;
-        } catch (err: any) {
-          resultContent = JSON.stringify({ error: err.message });
-          console.error(`  ← ${block.name} ERROR:`, err.message);
-        }
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: resultContent,
-        });
-      }
-
-      messages.push({ role: "user", content: toolResults });
-      continue;
-    }
-
-    console.warn(`[agent] unexpected stop_reason: ${response.stop_reason}`);
-    break;
+  if (isDelegated) {
+    console.log(`  [skip] session still delegated to MagicBlock ER — skipping update_lp_status`);
+  } else {
+    sig = await submitUpdateLpStatus(ctx, activeBin, feeX, feeY);
+    console.log(`  tx: ${sig}`);
   }
+
+  // 3. Build a deterministic summary and persist to MEMORY.md
+  //    (last 30 entries are fed to Claude as context when the user chats)
+  const rangeLabel = isInRange ? "in range" : "OUT OF RANGE";
+  const delegatedNote = isDelegated ? " [ER delegated — checkpoint skipped]" : "";
+  const summary =
+    `Tick #${tickNumber}: bin ${activeBin} ${rangeLabel}` +
+    ` [${positionMinBin}–${positionMaxBin}],` +
+    ` fees X=${feeX.toString()} Y=${feeY.toString()}${delegatedNote}.`;
+
+  appendMemory(summary);
+  console.log(`  [agent] ${summary}`);
 
   return {
     type: "tick",
     tickNumber,
     timestamp,
-    activeBin: checkResult?.activeBin ?? null,
-    positionMinBin: checkResult?.positionMinBin ?? null,
-    positionMaxBin: checkResult?.positionMaxBin ?? null,
-    isInRange: checkResult?.isInRange ?? null,
-    feeX: checkResult?.feeX ?? null,
-    feeY: checkResult?.feeY ?? null,
-    txSignature: txResult?.signature ?? null,
-    explorerUrl: txResult?.explorer ?? null,
+    activeBin,
+    positionMinBin,
+    positionMaxBin,
+    isInRange,
+    feeX: feeX.toString(),
+    feeY: feeY.toString(),
+    txSignature: sig,
+    explorerUrl: sig ? `https://explorer.solana.com/tx/${sig}?cluster=devnet` : null,
     summary,
     error: null,
   };

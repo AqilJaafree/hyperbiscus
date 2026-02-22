@@ -19,6 +19,7 @@ import { SolanaContext, submitUpdateLpStatus } from "./solana";
 // Last check result — passed to update_lp_status so Claude doesn't re-fetch
 let lastStatus: LpPositionStatus | null = null;
 
+/** Full tool set — used by the monitoring tick (read + checkpoint). */
 export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "check_lp_position",
@@ -58,6 +59,15 @@ export const TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
+export interface PositionSnapshot {
+  activeBin: number;
+  positionMinBin: number;
+  positionMaxBin: number;
+  isInRange: boolean;
+  feeX: string;
+  feeY: string;
+}
+
 export interface ToolExecutors {
   check_lp_position: () => Promise<object>;
   update_lp_status: (input: {
@@ -70,6 +80,7 @@ export interface ToolExecutors {
 export function buildToolExecutors(
   config: AgentConfig,
   ctx: SolanaContext,
+  onPositionFetch?: (snapshot: PositionSnapshot) => void,
 ): ToolExecutors {
   const connection = new Connection(config.rpcUrl, "confirmed");
 
@@ -82,7 +93,7 @@ export function buildToolExecutors(
         "devnet",
       );
       lastStatus = status;
-      return {
+      const snapshot: PositionSnapshot = {
         activeBin: status.activeBin,
         positionMinBin: status.positionMinBin,
         positionMaxBin: status.positionMaxBin,
@@ -90,6 +101,8 @@ export function buildToolExecutors(
         feeX: status.feeX.toString(),
         feeY: status.feeY.toString(),
       };
+      onPositionFetch?.(snapshot);
+      return snapshot;
     },
 
     async update_lp_status({ active_bin, fee_x, fee_y }) {
@@ -107,6 +120,11 @@ export function buildToolExecutors(
     },
   };
 }
+
+/** Chat-only tool set — excludes update_lp_status to prevent accidental on-chain writes during chat. */
+export const CHAT_TOOL_DEFINITIONS: Tool[] = TOOL_DEFINITIONS.filter(
+  (t) => t.name !== "update_lp_status",
+);
 
 export async function executeTool(
   name: string,
